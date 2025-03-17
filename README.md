@@ -25,6 +25,7 @@ The repository includes various commands and robots with different skill sets fo
 
 ## Environment Setup
 ### 1. Environment Setup
+
 Create a conda environment (or virtualenv):
 ```bash
 conda create -n lammap python==3.9
@@ -37,11 +38,11 @@ pip install -r requirements.txt
 ```
 
 ### 2. Fast Downward Planner Setup
-The project requires the Fast Downward planner. Follow these steps to set it up:
+The project requires the [Fast Downward Planner](https://github.com/aibasel/downward/). Follow these steps to set it up:
 
-1. Clone the Fast Downward repository:
+1. Clone the Fast Downward repository as a submodule:
 ```bash
-git clone https://github.com/aibasel/downward.git
+git submodule update --init --recursive
 cd downward
 ```
 
@@ -54,8 +55,6 @@ cd downward
 ```bash
 ./fast-downward.py --help
 ```
-
-Note: Make sure the Fast Downward planner is cloned in the root directory of the project. The default path used in the code is `/downward/fast-downward.py`. If you install it in a different location, update the `planner_path` variable in `scripts/pddlrun_llmseparate.py`.
 
 ### 3. OpenAI API Setup
 The code relies on OpenAI's API for LLM functionality. To set this up:
