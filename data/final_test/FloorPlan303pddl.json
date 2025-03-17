@@ -1,0 +1,2 @@
+{"task": "Parallely put pen and book on the bed", "robot list": [11, 17 ,25], "object_states" : [{"name": "Bed", "contains": ["Pen", "Pensil"], "state": "None"}], "trans": 0, "min_trans": 17}
+{"task": "Break all High-tech electronics", "robot list": [22,23,24,25,13],"object_states" : [{"name": "CellPhone", "contains": [], "state": "BROKEN"}, {"name": "Television", "contains": [], "state": "BROKEN"}], "trans": 0, "min_trans": 8}
