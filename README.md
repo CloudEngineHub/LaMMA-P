@@ -94,11 +94,12 @@ Replace `<log_folder_name>` with the specific folder name in the `logs` director
 ## Citation
 If you find this work useful for your research, please consider citing:
 ```bibtex
-@article{zhang2024lamma,
+@inproceedings{zhang2025lamma,
   title={LaMMA-P: Generalizable Multi-Agent Long-Horizon Task Allocation and Planning with LM-Driven PDDL Planner},
   author={Zhang, Xiaopan and Qin, Hao and Wang, Fuquan and Dong, Yue and Li, Jiachen},
-  journal={arXiv preprint arXiv:2409.20560},
-  year={2024}
+  journal={2025 IEEE International Conference on Robotics and Automation (ICRA)},
+  year={2025},
+  organization={IEEE}
 }
 ```
 
