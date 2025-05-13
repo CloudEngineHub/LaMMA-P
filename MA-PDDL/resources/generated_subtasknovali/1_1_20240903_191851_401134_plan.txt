@@ -1,0 +1,77 @@
+INFO     planner time limit: None
+INFO     planner memory limit: None
+
+INFO     Running translator.
+INFO     translator stdin: None
+INFO     translator time limit: None
+INFO     translator memory limit: None
+INFO     translator command line string: /home/hao/miniconda3/envs/smartllm/bin/python3 /home/hao/ma-pddl/MA-PDDL/downward/builds/release/bin/translate/translate.py /home/hao/ma-pddl/MA-PDDL/resources/robot1.pddl /home/hao/ma-pddl/MA-PDDL/resources/generated_subtasknovali/1_1_20240903_191851_401134.pddl --sas-file output.sas
+Parsing...
+Parsing: [0.000s CPU, 0.001s wall-clock]
+Normalizing task... [0.000s CPU, 0.000s wall-clock]
+Instantiating...
+Generating Datalog program... [0.000s CPU, 0.000s wall-clock]
+Normalizing Datalog program...
+Normalizing Datalog program: [0.000s CPU, 0.001s wall-clock]
+Preparing model... [0.000s CPU, 0.000s wall-clock]
+Generated 38 rules.
+Computing model... [0.000s CPU, 0.000s wall-clock]
+52 relevant atoms
+33 auxiliary atoms
+85 final queue length
+105 total queue pushes
+Completing instantiation... [0.000s CPU, 0.000s wall-clock]
+Instantiating: [0.000s CPU, 0.002s wall-clock]
+No relaxed solution! Generating unsolvable task...
+Translator variables: 1
+Translator derived variables: 0
+Translator facts: 2
+Translator goal facts: 1
+Translator mutex groups: 0
+Translator total mutex groups size: 0
+Translator operators: 0
+Translator axioms: 0
+Translator task size: 4
+Translator peak memory: 31388 KB
+Writing output... [0.000s CPU, 0.000s wall-clock]
+Done! [0.000s CPU, 0.004s wall-clock]
+translate exit code: 0
+
+INFO     Running search (release).
+INFO     search stdin: output.sas
+INFO     search time limit: None
+INFO     search memory limit: None
+INFO     search command line string: /home/hao/ma-pddl/MA-PDDL/downward/builds/release/bin/downward --search 'astar(lmcut())' --internal-plan-file sas_plan < output.sas
+[t=0.000069s, 9668 KB] reading input...
+[t=0.000139s, 9668 KB] done reading input!
+[t=0.000793s, 9932 KB] Initializing landmark cut heuristic...
+[t=0.000834s, 9932 KB] Building successor generator...done!
+[t=0.000860s, 9932 KB] peak memory difference for successor generator creation: 0 KB
+[t=0.000867s, 9932 KB] time for successor generation creation: 0.000002s
+[t=0.000875s, 9932 KB] Variables: 1
+[t=0.000883s, 9932 KB] FactPairs: 2
+[t=0.000890s, 9932 KB] Bytes per state: 4
+[t=0.000904s, 9932 KB] Conducting best first search with reopening closed nodes, (real) bound = 2147483647
+[t=0.000921s, 9932 KB] Initial state is a dead end.
+[t=0.000929s, 9932 KB] Initial heuristic value for lmcut: infinity
+[t=0.000939s, 9932 KB] pruning method: none
+[t=0.000946s, 9932 KB] Completely explored state space -- no solution!
+[t=0.000953s, 9932 KB] Actual search time: 0.000014s
+[t=0.000960s, 9932 KB] Expanded 0 state(s).
+[t=0.000960s, 9932 KB] Reopened 0 state(s).
+[t=0.000960s, 9932 KB] Evaluated 1 state(s).
+[t=0.000960s, 9932 KB] Evaluations: 1
+[t=0.000960s, 9932 KB] Generated 0 state(s).
+[t=0.000960s, 9932 KB] Dead ends: 0 state(s).
+[t=0.000960s, 9932 KB] Number of registered states: 1
+[t=0.000960s, 9932 KB] Int hash set load factor: 1/1 = 1.000000
+[t=0.000960s, 9932 KB] Int hash set resizes: 0
+[t=0.000960s, 9932 KB] Search time: 0.000057s
+[t=0.000960s, 9932 KB] Total time: 0.000960s
+Search stopped without finding a solution.
+Peak memory: 9932 KB
+Remove intermediate file output.sas
+search exit code: 12
+
+Driver aborting after search
+INFO     Planner time: 0.04s
