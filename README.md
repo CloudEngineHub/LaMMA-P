@@ -86,9 +86,15 @@ Output files are stored in the `logs` directory, organized by timestamp and task
 
 ### 2. Execute Plans in AI2Thor
 To execute the generated plans in the AI2Thor environment:
+Convert the target plan into code
+```bash
+python scripts/plantocode.py --logs-dir ./logs --validate-code
+```
+then, 
 ```bash
 python scripts/execute_plan.py --command <log_folder_name>
 ```
+
 Replace `<log_folder_name>` with the specific folder name in the `logs` directory containing your generated plan.
 
 ## Citation

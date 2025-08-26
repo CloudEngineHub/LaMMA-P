@@ -87,6 +87,18 @@ python pddlrun_llmseparate.py \
     --log-results <boolean>
 ```
 
+### Plan-to-Code 
+
+
+```bash
+# Enable validation (default)
+python plantocode.py --logs-dir ./logs --validate-code
+
+# Disable validation for faster processing
+python plantocode.py --logs-dir ./logs --no-validate-code
+```
+
+
 ## Error Handling
 
 The system will raise the following exceptions if path requirements are not met:

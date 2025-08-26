@@ -113,94 +113,405 @@ class LLMHandler:
                 raise LLMError(f"Unexpected error in LLM query: {str(e)}")
 
 class MimicFormatTranslator:
-    """Translates PDDL action sequences to mimic format using OpenAI API."""
+    """Translates complete PDDL plans to mimic format using OpenAI API."""
     
     def __init__(self, api_key_file: str, gpt_version: str = "gpt-4o"):
-        """Initialize the translator with OpenAI API.
-        
-        Args:
-            api_key_file (str): Path to the API key file
-            gpt_version (str): GPT model version to use
-        """
         self.gpt_version = gpt_version
         self.llm = LLMHandler(api_key_file)
         print(f"Initialized MimicFormatTranslator with {gpt_version}")
     
-    def create_few_shot_prompt(self, task_description: str, action_sequence: str) -> Union[str, List[Dict]]:
-        """Create a few-shot prompt to translate PDDL actions to mimic format."""
+    def validate_mimic_code(self, mimic_code: str, task_description: str) -> Tuple[bool, str]:
+        """Validate if the generated mimic code would be executable by execute_plan.py.
         
-        # Few-shot examples based on the AI2-THOR controller format
-        few_shot_examples = """# Example 1: Washing an Apple
-Task: Wash the apple
-PDDL Actions: GoToObject, PickupObject, GoToObject, PutObject, SwitchOn, SwitchOff, PickupObject, GoToObject, PutObject
+        Args:
+            mimic_code (str): The generated mimic code to validate
+            task_description (str): Description of the task for context
+            
+        Returns:
+            Tuple[bool, str]: (is_valid, validation_message)
+        """
+        try:
+            # Create validation prompt
+            validation_prompt = f"""You are a Python code validator for AI2-THOR robot execution. 
+Your task is to validate if the following code would be executable by execute_plan.py.
 
-def wash_apple(robot):
+Context: This code is generated from a PDDL plan for the task: "{task_description}"
+
+Available AI2-THOR functions (assume these are imported and available):
+- GoToObject(robot, object_name)
+- PickupObject(robot, object_name) 
+- PutObject(robot, object_name, target_location)
+- SwitchOn(robot, object_name)
+- SwitchOff(robot, object_name)
+- time.sleep(seconds)
+
+Available variables (assume these are defined):
+- robots: list of robot objects [robots[0], robots[1], etc.]
+- action_queue: list for tracking actions
+- task_over: boolean flag
+
+Validation criteria:
+1. All function calls must use valid AI2-THOR functions
+2. All robot parameters must reference robots list (e.g., robots[0], robots[1])
+3. Function parameters should be 'robots' (not 'robot') and access robots[0], robots[1], etc.
+4. Threading must be properly structured with start() and join()
+5. Action queue must be properly managed
+6. No undefined variables or functions
+7. Proper Python syntax
+
+Generated code to validate:
+{mimic_code}
+
+Please analyze this code and respond with:
+1. VALID: true/false
+2. ISSUES: List any issues found (empty if valid)
+3. SUGGESTIONS: How to fix any issues (empty if valid)
+
+Format your response exactly like this:
+VALID: true
+ISSUES: 
+SUGGESTIONS: 
+
+Or if there are issues:
+VALID: false
+ISSUES: 
+- Issue 1 description
+- Issue 2 description
+SUGGESTIONS:
+- Fix 1: specific suggestion
+- Fix 2: specific suggestion
+"""
+
+            # Query the model for validation - use proper message format for GPT models
+            if "gpt" not in self.gpt_version:
+                # For older models, use string prompt
+                _, validation_response = self.llm.query_model(
+                    prompt=validation_prompt,
+                    gpt_version=self.gpt_version,
+                    max_tokens=512,
+                    temperature=0.0,  # Use 0 temperature for consistent validation
+                    frequency_penalty=0.0
+                )
+            else:
+                # For GPT models, use message format
+                messages = [
+                    {"role": "system", "content": "You are a Python code validator for AI2-THOR robot execution. Your task is to validate if code would be executable by execute_plan.py."},
+                    {"role": "user", "content": validation_prompt}
+                ]
+                _, validation_response = self.llm.query_model(
+                    prompt=messages,
+                    gpt_version=self.gpt_version,
+                    max_tokens=512,
+                    temperature=0.0,  # Use 0 temperature for consistent validation
+                    frequency_penalty=0.0
+                )
+            
+            # Parse validation response
+            is_valid = False
+            issues = []
+            suggestions = []
+            
+            lines = validation_response.strip().split('\n')
+            for line in lines:
+                if line.startswith('VALID:'):
+                    is_valid = line.split(':', 1)[1].strip().lower() == 'true'
+                elif line.startswith('ISSUES:'):
+                    # Collect all issue lines until we hit SUGGESTIONS
+                    continue
+                elif line.startswith('SUGGESTIONS:'):
+                    # Collect all suggestion lines
+                    continue
+                elif line.strip().startswith('-') and 'ISSUES:' in validation_response:
+                    # This is an issue line
+                    if 'SUGGESTIONS:' not in validation_response or validation_response.find('ISSUES:') < validation_response.find('SUGGESTIONS:'):
+                        issues.append(line.strip()[1:].strip())
+                elif line.strip().startswith('-') and 'SUGGESTIONS:' in validation_response:
+                    # This is a suggestion line
+                    if validation_response.find('SUGGESTIONS:') < validation_response.find(line):
+                        suggestions.append(line.strip()[1:].strip())
+            
+            # Create validation message
+            if is_valid:
+                validation_message = "✓ Code validation passed - executable by execute_plan.py"
+            else:
+                validation_message = f"✗ Code validation failed:\n"
+                if issues:
+                    validation_message += "Issues found:\n"
+                    for issue in issues:
+                        validation_message += f"  - {issue}\n"
+                if suggestions:
+                    validation_message += "Suggestions:\n"
+                    for suggestion in suggestions:
+                        validation_message += f"  - {suggestion}\n"
+            
+            return is_valid, validation_message
+            
+        except Exception as e:
+            return False, f"Validation error: {str(e)}"
+    
+    def validate_and_fix_mimic_code(self, mimic_code: str, task_description: str) -> Tuple[bool, str, str]:
+        """Validate and fix the generated mimic code to match the AI2-THOR template.
+        
+        Args:
+            mimic_code (str): The generated mimic code to validate and fix
+            task_description (str): Description of the task for context
+            
+        Returns:
+            Tuple[bool, str, str]: (is_valid, validation_message, corrected_code)
+        """
+        try:
+            # Create validation and fixing prompt
+            fix_prompt = f"""You are a Python code validator and fixer for AI2-THOR robot execution. 
+Your task is to validate and FIX the following code to match the AI2-THOR template structure.
+
+Context: This code is generated from a PDDL plan for the task: "{task_description}"
+
+CRITICAL: DO NOT REDEFINE AI2-THOR FUNCTIONS
+The following AI2-THOR functions are ALREADY DEFINED and available:
+- GoToObject(robot, object_name)
+- PickupObject(robot, object_name) 
+- PutObject(robot, object_name, target_location)
+- SwitchOn(robot, object_name)
+- SwitchOff(robot, object_name)
+- time.sleep(seconds)
+
+DO NOT create new function definitions for these. Use them directly as shown in the template.
+DO NOT add "def GoToObject(...):" or similar definitions.
+
+Required template structure:
+1. Functions should take 'robots' parameter and use robots[0], robots[1], etc.
+2. Use proper threading for parallel execution
+3. Include action_queue management
+4. Use task_over flag
+5. Follow this exact structure:
+
+def task_function(robots):
+    # Task description
+    GoToObject(robots[0], 'Object')
+    PickupObject(robots[0], 'Object')
+    # ... more actions
+
+# Threading setup
+task1_thread = threading.Thread(target=task_function, args=(robots,))
+task1_thread.start()
+task1_thread.join()
+
+# Action queue and completion
+action_queue.append({{'action':'Done'}})
+task_over = True
+time.sleep(5)
+
+Generated code to fix:
+{mimic_code}
+
+Please analyze this code and:
+1. Fix all issues to match the AI2-THOR template
+2. Ensure proper robot parameter usage (robots[0], robots[1])
+3. Add proper threading structure if missing
+4. Add action_queue and task_over management
+5. Remove any invalid AI2-THOR functions and replace with valid ones
+6. REMOVE any function definitions for GoToObject, PickupObject, PutObject, etc. - these are already available
+
+Return ONLY the corrected code that follows the template structure exactly.
+"""
+
+            # Query the model for fixing
+            if "gpt" not in self.gpt_version:
+                # For older models, use string prompt
+                _, corrected_code = self.llm.query_model(
+                    prompt=fix_prompt,
+                    gpt_version=self.gpt_version,
+                    max_tokens=2048,
+                    temperature=0.0,
+                    frequency_penalty=0.0
+                )
+            else:
+                # For GPT models, use message format
+                messages = [
+                    {"role": "system", "content": "You are a Python code fixer for AI2-THOR robot execution. Fix the code to match the exact template structure."},
+                    {"role": "user", "content": fix_prompt}
+                ]
+                _, corrected_code = self.llm.query_model(
+                    prompt=messages,
+                    gpt_version=self.gpt_version,
+                    max_tokens=2048,
+                    temperature=0.0,
+                    frequency_penalty=0.0
+                )
+            
+            # Clean up the corrected code (remove markdown if present)
+            corrected_code = corrected_code.strip()
+            if corrected_code.startswith('```python'):
+                corrected_code = corrected_code[9:]
+            if corrected_code.endswith('```'):
+                corrected_code = corrected_code[:-3]
+            corrected_code = corrected_code.strip()
+            
+            # Validate the corrected code
+            is_valid, validation_message = self.validate_mimic_code(corrected_code, task_description)
+            
+            return is_valid, validation_message, corrected_code
+            
+        except Exception as e:
+            return False, f"Validation and fixing error: {str(e)}", mimic_code
+    
+    def create_few_shot_prompt(self, task_description: str, combined_plan: str) -> Union[str, List[Dict]]:
+        # Few-shot examples for complete plan translation
+        few_shot_examples = f"""# CRITICAL INSTRUCTION: DO NOT REDEFINE AI2-THOR FUNCTIONS
+# The following AI2-THOR functions are ALREADY DEFINED and available:
+# - GoToObject(robot, object_name)
+# - PickupObject(robot, object_name) 
+# - PutObject(robot, object_name, target_location)
+# - SwitchOn(robot, object_name)
+# - SwitchOff(robot, object_name)
+# - time.sleep(seconds)
+# 
+# DO NOT create new function definitions for these. Use them directly as shown in the template.
+# DO NOT add "def GoToObject(...):" or similar definitions.
+
+# Example: Complete PDDL Plan Translation with Multi-Robot Coordination
+Task: Wash multiple vegetables (apple, tomato, lettuce, potato)
+Complete PDDL Plan: (define (problem wash_vegetables) (:domain robot_domain) (:objects apple tomato lettuce potato sink faucet counter) (:init (at apple counter) (at tomato counter) (at lettuce counter) (at potato counter)) (:goal (and (washed apple) (washed tomato) (washed lettuce) (washed potato))))
+
+# IMPORTANT: Follow this EXACT structure for AI2-THOR execution
+# NOTE: AI2-THOR functions are already imported and available - DO NOT redefine them
+
+def wash_apple(robots):
     # 0: Task: Wash the Apple
     # 1: Go to the Apple.
-    GoToObject(robot, 'Apple')
+    GoToObject(robots[0], 'Apple')
     # 2: Pick up the Apple.
-    PickupObject(robot, 'Apple')
+    PickupObject(robots[0], 'Apple')
     # 3: Go to the Sink.
-    GoToObject(robot, 'Sink')
+    GoToObject(robots[0], 'Sink')
     # 4: Put the Apple in the Sink.
-    PutObject(robot, 'Apple', 'Sink')
+    PutObject(robots[0], 'Apple', 'Sink')
     # 5: Switch on the Faucet.
-    SwitchOn(robot, 'Faucet')
+    SwitchOn(robots[0], 'Faucet')
     # 6: Wait for a while to let the Apple wash.
     time.sleep(5)
     # 7: Switch off the Faucet.
-    SwitchOff(robot, 'Faucet')
+    SwitchOff(robots[0], 'Faucet')
     # 8: Pick up the washed Apple.
-    PickupObject(robot, 'Apple')
+    PickupObject(robots[0], 'Apple')
     # 9: Go to the CounterTop.
-    GoToObject(robot, 'CounterTop')
+    GoToObject(robots[0], 'CounterTop')
     # 10: Put the washed Apple on the CounterTop.
-    PutObject(robot, 'Apple', 'CounterTop')
+    PutObject(robots[0], 'Apple', 'CounterTop')
 
-# Example 2: Moving Objects
-Task: Move the book from table to shelf
-PDDL Actions: GoToObject, PickupObject, GoToObject, PutObject
+def wash_tomato(robots):
+    # 0: Task: Wash the Tomato
+    # 1: Go to the Tomato.
+    GoToObject(robots[1], 'Tomato')
+    # 2: Pick up the Tomato.
+    PickupObject(robots[1], 'Tomato')
+    # 3: Go to the Sink.
+    GoToObject(robots[1], 'Sink')
+    # 4: Put the Tomato in the Sink.
+    PutObject(robots[1], 'Tomato', 'Sink')
+    # 5: Switch on the Faucet.
+    SwitchOn(robots[1], 'Faucet')
+    # 6: Wait for a while to let the Tomato wash.
+    time.sleep(5)
+    # 7: Switch off the Faucet.
+    SwitchOff(robots[1], 'Faucet')
+    # 8: Pick up the washed Tomato.
+    PickupObject(robots[1], 'Tomato')
+    # 9: Go to the CounterTop.
+    GoToObject(robots[1], 'CounterTop')
+    # 10: Put the washed Tomato on the CounterTop.
+    PutObject(robots[1], 'Tomato', 'CounterTop')
 
-def move_book(robot):
-    # 0: Task: Move the book from table to shelf
-    # 1: Go to the Book.
-    GoToObject(robot, 'Book')
-    # 2: Pick up the Book.
-    PickupObject(robot, 'Book')
-    # 3: Go to the Shelf.
-    GoToObject(robot, 'Shelf')
-    # 4: Put the Book on the Shelf.
-    PutObject(robot, 'Book', 'Shelf')
+def wash_lettuce(robots):
+    # 0: Task: Wash the Lettuce
+    # 1: Go to the Lettuce.
+    GoToObject(robots[0], 'Lettuce')
+    # 2: Pick up the Lettuce.
+    PickupObject(robots[0], 'Lettuce')
+    # 3: Go to the Sink.
+    GoToObject(robots[0], 'Sink')
+    # 4: Put the Lettuce in the Sink.
+    PutObject(robots[0], 'Lettuce', 'Sink')
+    # 5: Switch on the Faucet.
+    SwitchOn(robots[0], 'Faucet')
+    # 6: Wait for a while to let the Lettuce wash.
+    time.sleep(5)
+    # 7: Switch off the Faucet.
+    SwitchOff(robots[0], 'Faucet')
+    # 8: Pick up the washed Lettuce.
+    PickupObject(robots[0], 'Lettuce')
+    # 9: Go to the CounterTop.
+    GoToObject(robots[0], 'CounterTop')
+    # 10: Put the washed Lettuce on the CounterTop.
+    PutObject(robots[0], 'Lettuce', 'CounterTop')
 
-# Example 3: Complex Task with Multiple Objects
-Task: Prepare a snack by moving apple and bread to the counter
-PDDL Actions: GoToObject, PickupObject, GoToObject, PutObject, GoToObject, PickupObject, GoToObject, PutObject
+def wash_potato(robots):
+    # 0: Task: Wash the Potato
+    # 1: Go to the Potato.
+    GoToObject(robots[1], 'Potato')
+    # 2: Pick up the Potato.
+    PickupObject(robots[1], 'Potato')
+    # 3: Go to the Sink.
+    GoToObject(robots[1], 'Sink')
+    # 4: Put the Potato in the Sink.
+    PutObject(robots[1], 'Potato', 'Sink')
+    # 5: Switch on the Faucet.
+    SwitchOn(robots[1], 'Faucet')
+    # 6: Wait for a while to let the Potato wash.
+    time.sleep(5)
+    # 7: Switch off the Faucet.
+    SwitchOff(robots[1], 'Faucet')
+    # 8: Pick up the washed Potato.
+    PickupObject(robots[1], 'Potato')
+    # 9: Go to the CounterTop.
+    GoToObject(robots[1], 'CounterTop')
+    # 10: Put the washed Potato on the CounterTop.
+    PutObject(robots[1], 'Potato', 'CounterTop')
 
-def prepare_snack(robot):
-    # 0: Task: Prepare a snack by moving apple and bread to the counter
-    # 1: Go to the Apple.
-    GoToObject(robot, 'Apple')
-    # 2: Pick up the Apple.
-    PickupObject(robot, 'Apple')
-    # 3: Go to the Counter.
-    GoToObject(robot, 'Counter')
-    # 4: Put the Apple on the Counter.
-    PutObject(robot, 'Apple', 'Counter')
-    # 5: Go to the Bread.
-    GoToObject(robot, 'Bread')
-    # 6: Pick up the Bread.
-    PickupObject(robot, 'Bread')
-    # 7: Go to the Counter.
-    GoToObject(robot, 'Counter')
-    # 8: Put the Bread on the Counter.
-    PutObject(robot, 'Bread', 'Counter')
+# CRITICAL: Robot task allocation and threading structure
+# Assign tasks to robots based on their skills
+# Parallelize all tasks
+# Assign Task1 to robot1 since it has all the skills to perform actions in Task 1
+task1_thread = threading.Thread(target=wash_apple, args=(robots,))
+# Assign Task2 to robot2 since it has all the skills to perform actions in Task 2
+task2_thread = threading.Thread(target=wash_tomato, args=(robots,))
 
-# Now translate the following task:
+# Start executing Task 1 and Task 2 in parallel
+task1_thread.start()
+task2_thread.start()
+
+# Wait for both Task 1 and Task 2 to finish
+task1_thread.join()
+task2_thread.join()
+
+# Assign Task3 to robot1 since it has all the skills to perform actions in Task 3
+task3_thread = threading.Thread(target=wash_lettuce, args=(robots,))
+# Assign Task4 to robot2 since it has all the skills to perform actions in Task 4
+task4_thread = threading.Thread(target=wash_potato, args=(robots,))
+
+# Start executing Task 3 and Task 4 in parallel
+task3_thread.start()
+task4_thread.start()
+
+# Wait for both Task 3 and Task 4 to finish
+task3_thread.join()
+task4_thread.join()
+
+# Task wash_apple, wash_tomato, wash_lettuce, wash_potato is done
+action_queue.append({{'action':'Done'}})
+action_queue.append({{'action':'Done'}})
+action_queue.append({{'action':'Done'}})
+
+task_over = True
+time.sleep(5)
+
+# Now translate the following complete plan:
 Task: {task_description}
-PDDL Actions: {action_sequence}
+Complete PDDL Plan: {combined_plan}
 
-def execute_task(robot):
-    # 0: Task: {task_description}
+# IMPORTANT: Generate code that follows the EXACT structure above
+def execute_task():
+    # Complete plan execution for: {task_description}
 """
         
         # Return as string for older GPT models, or as messages for newer ones
@@ -208,18 +519,18 @@ def execute_task(robot):
             return few_shot_examples
         else:
             return [
-                {"role": "system", "content": "You are a Robot PDDL to Mimic Format Translator. Your task is to translate PDDL action sequences into executable Python code following the AI2-THOR controller format. Follow the examples exactly."},
+                {"role": "system", "content": "You are a Robot PDDL to Mimic Format Translator. Your task is to translate complete PDDL plans into executable Python code following the AI2-THOR controller format. Translate the entire plan as a single coherent function."},
                 {"role": "user", "content": few_shot_examples}
             ]
     
-    def translate_to_mimic_format(self, task_description: str, action_sequence: str,
-                                max_tokens: int = 1024,
+    def translate_to_mimic_format(self, task_description: str, combined_plan: str,
+                                max_tokens: int = 2048,  # Increased for complete plans
                                 temperature: float = 0.1,
                                 frequency_penalty: float = 0.0) -> str:
-        """Translate PDDL action sequence to mimic format using OpenAI API."""
+        """Translate complete PDDL plan to mimic format using OpenAI API."""
         try:
             # Create few-shot prompt
-            prompt = self.create_few_shot_prompt(task_description, action_sequence)
+            prompt = self.create_few_shot_prompt(task_description, combined_plan)
             
             # Query the model
             start_time = time.time()
@@ -239,8 +550,7 @@ def execute_task(robot):
             raise MimicTranslationError(f"Error in mimic translation: {str(e)}")
     
     def extract_function_name(self, task_description: str) -> str:
-
-
+        """Extract a function name from task description."""
         clean_task = re.sub(r'[^a-zA-Z0-9\s]', '', task_description.lower())
         words = clean_task.split()[:3]  # Take first 3 words
         function_name = '_'.join(words)
@@ -280,30 +590,27 @@ def load_pddl_results_from_logs(logs_dir: str) -> List[Dict[str, Any]]:
             lines = log_content.split('\n')
             task_description = lines[0] if lines else "Unknown task"
             
-            # Read the final PDDL plan (code_planpddl.py)
-            pddl_file = folder / "code_planpddl.py"
-            if not pddl_file.exists():
+            # Read the COMBINED plan (code_planpddl.py) - this contains the complete executable plan
+            combined_plan_file = folder / "code_planpddl.py"
+            if not combined_plan_file.exists():
                 print(f"Warning: code_planpddl.py not found in {folder}")
                 continue
             
-            with open(pddl_file, 'r', encoding='utf-8') as f:
-                pddl_content = f.read()
+            with open(combined_plan_file, 'r', encoding='utf-8') as f:
+                combined_plan_content = f.read()
             
-            # Extract action sequence from PDDL content
-            action_sequence = extract_actions_from_pddl(pddl_content)
-            
-            # Create result entry
+            # Create result entry with the complete plan
             result = {
                 'episode_id': folder.name,
                 'scene_id': 'pddl_generated',
                 'task_description': task_description,
-                'extracted_action_sequence': action_sequence,
-                'pddl_content': pddl_content,
+                'combined_plan': combined_plan_content,  # Store the complete plan
                 'log_folder': str(folder)
             }
             
             results.append(result)
             print(f"  ✓ Loaded: {folder.name} - {task_description[:50]}...")
+            print(f"    Plan length: {len(combined_plan_content)} characters")
             
         except Exception as e:
             print(f"Error processing folder {folder}: {e}")
@@ -311,34 +618,6 @@ def load_pddl_results_from_logs(logs_dir: str) -> List[Dict[str, Any]]:
     
     print(f"Successfully loaded {len(results)} PDDL results")
     return results
-
-def extract_actions_from_pddl(pddl_content: str) -> str:
-    """Extract action sequence from PDDL plan content."""
-    
-    # Look for action patterns in PDDL content
-    action_patterns = [
-        r'\(([a-zA-Z][a-zA-Z0-9_-]*)\s+[^)]*\)',  # (action_name ...)
-        r'\(:action\s+([a-zA-Z][a-zA-Z0-9_-]*)',   # (:action action_name
-        r'([a-zA-Z][a-zA-Z0-9_-]*)\s*\([^)]*\)',  # action_name(...)
-    ]
-    
-    actions = []
-    
-    for pattern in action_patterns:
-        matches = re.findall(pattern, pddl_content, re.IGNORECASE)
-        for match in matches:
-            action_name = match.strip()
-            # Filter out common PDDL keywords
-            if action_name.lower() not in ['define', 'domain', 'problem', 'requirements', 'types', 'predicates', 'action', 'parameters', 'precondition', 'effect', 'goal', 'init', 'objects']:
-                actions.append(action_name)
-    
-    # Remove duplicates while preserving order
-    unique_actions = []
-    for action in actions:
-        if action not in unique_actions:
-            unique_actions.append(action)
-    
-    return ', '.join(unique_actions)
 
 def load_extraction_results(results_file: str) -> List[Dict[str, Any]]:
     """Load results from JSON file (for backward compatibility)."""
@@ -351,13 +630,17 @@ def load_extraction_results(results_file: str) -> List[Dict[str, Any]]:
         print(f"Error loading results file {results_file}: {e}")
         return []
 
-def process_results_for_mimic(results: List[Dict[str, Any]], translator: MimicFormatTranslator,
-                            output_dir: str, batch_size: int = 3) -> List[Dict[str, Any]]:
-    """Process all results to translate to mimic format."""
+def process_results_for_plan_to_code(results: List[Dict[str, Any]], translator: MimicFormatTranslator,
+                            output_dir: str, batch_size: int = 3, validate_code: bool = True) -> List[Dict[str, Any]]:
+    """Process all results to translate to plan-to-code format."""
     processed_results = []
     
-    print(f"Processing {len(results)} results for mimic format translation...")
+    print(f"Processing {len(results)} results for plan-to-code translation...")
     print(f"Processing in batches of {batch_size}")
+    if validate_code:
+        print("Code validation enabled - checking execute_plan.py compatibility")
+    else:
+        print("Code validation disabled")
     
     # Process in batches to manage API rate limits
     for batch_start in range(0, len(results), batch_size):
@@ -372,48 +655,76 @@ def process_results_for_mimic(results: List[Dict[str, Any]], translator: MimicFo
             episode_id = result.get('episode_id', f'task_{global_index}')
             scene_id = result.get('scene_id', 'unknown')
             task_description = result.get('task_description', '')
-            action_sequence = result.get('extracted_action_sequence', '')
+            combined_plan = result.get('combined_plan', '')
             
             print(f"\n[{global_index + 1}/{len(results)}] Processing Episode {episode_id}, Scene {scene_id}")
             
             try:
-                # Skip if no action sequence was extracted
-                if not action_sequence or action_sequence.strip() == "":
-                    print(f"  ⚠ No action sequence found, skipping")
+                # Skip if no combined plan was loaded
+                if not combined_plan or combined_plan.strip() == "":
+                    print(f"  ⚠ No combined plan found, skipping")
                     processed_result = {
                         'episode_id': episode_id,
                         'scene_id': scene_id,
                         'task_description': task_description,
-                        'original_action_sequence': action_sequence,
+                        'original_combined_plan': combined_plan,
                         'mimic_format_code': None,
                         'function_name': None,
                         'translation_time': 0,
                         'success': False,
-                        'error': 'No action sequence to translate'
+                        'error': 'No combined plan to translate',
+                        'validation_message': 'Skipped - no plan to validate',
+                        'log_folder': result.get('log_folder', '')  # Add the log_folder to processed_result
                     }
                     processed_results.append(processed_result)
                     continue
                 
                 # Translate to mimic format using OpenAI API
                 start_time = time.time()
-                mimic_code = translator.translate_to_mimic_format(task_description, action_sequence)
+                mimic_code = translator.translate_to_mimic_format(task_description, combined_plan)
                 translation_time = time.time() - start_time
                 
                 # Extract function name
                 function_name = translator.extract_function_name(task_description)
+                
+                # Validate and fix the generated mimic code if enabled
+                if validate_code:
+                    print(f"  🔧 Validating and fixing generated code...")
+                    try:
+                        is_valid, validation_message, corrected_code = translator.validate_and_fix_mimic_code(mimic_code, task_description)
+                        # Use the corrected code instead of the original
+                        if corrected_code and len(corrected_code.strip()) > 0:
+                            mimic_code = corrected_code
+                            print(f"  📝 Original code length: {len(mimic_code) if mimic_code else 0}")
+                            print(f"  📝 Corrected code length: {len(corrected_code) if corrected_code else 0}")
+                            print(f"  ✅ Validation result: {is_valid}")
+                        else:
+                            print(f"  ⚠ Validation returned empty code, using original")
+                            is_valid = True
+                            validation_message = "Using original code - validation returned empty"
+                    except Exception as e:
+                        print(f"  ⚠ Validation failed: {e}, using original code")
+                        is_valid = True
+                        validation_message = f"Using original code - validation error: {str(e)}"
+                else:
+                    is_valid = True
+                    validation_message = "Validation skipped"
                 
                 # Create processed result
                 processed_result = {
                     'episode_id': episode_id,
                     'scene_id': scene_id,
                     'task_description': task_description,
-                    'original_action_sequence': action_sequence,
+                    'original_combined_plan': combined_plan,
                     'mimic_format_code': mimic_code,
                     'function_name': function_name,
                     'translation_time': translation_time,
                     'extraction_time': result.get('extraction_time', 0),
                     'generation_time': result.get('generation_time', 0),
-                    'success': len(mimic_code.strip()) > 0
+                    'success': len(mimic_code.strip()) > 0 if mimic_code else False, # Consider successful if we have code, regardless of validation
+                    'validation_passed': is_valid,  # Track validation status separately
+                    'validation_message': validation_message,
+                    'log_folder': result.get('log_folder', '')  # Add the log_folder to processed_result
                 }
                 
                 processed_results.append(processed_result)
@@ -421,6 +732,7 @@ def process_results_for_mimic(results: List[Dict[str, Any]], translator: MimicFo
                 print(f"  ✓ Translated to mimic format ({translation_time:.2f}s)")
                 print(f"  Function name: {function_name}")
                 print(f"  Code preview: {mimic_code[:100]}{'...' if len(mimic_code) > 100 else ''}")
+                # Remove validation message printing but keep validation functionality
                 
             except Exception as e:
                 print(f"  ✗ Error in mimic translation: {e}")
@@ -428,9 +740,11 @@ def process_results_for_mimic(results: List[Dict[str, Any]], translator: MimicFo
                     'episode_id': episode_id,
                     'scene_id': scene_id,
                     'task_description': task_description,
-                    'original_action_sequence': action_sequence,
+                    'original_combined_plan': combined_plan,
                     'error': str(e),
-                    'success': False
+                    'success': False,
+                    'validation_message': f'Error during translation: {str(e)}',
+                    'log_folder': result.get('log_folder', '')  # Add the log_folder to processed_result
                 }
                 processed_results.append(processed_result)
         
@@ -441,35 +755,57 @@ def process_results_for_mimic(results: List[Dict[str, Any]], translator: MimicFo
     
     return processed_results
 
-def save_individual_mimic_files(processed_results: List[Dict[str, Any]], output_dir: str):
-    """Save individual mimic format files for each successful translation."""
-    mimic_dir = Path(output_dir) / "mimic_code_files"
-    mimic_dir.mkdir(parents=True, exist_ok=True)
+def save_individual_plan_to_code_files(processed_results: List[Dict[str, Any]], output_dir: str):
+    """Save individual plan-to-code format files directly in the original log folders."""
     
     successful_translations = [r for r in processed_results if r.get('success', False)]
     
-    print(f"\nSaving {len(successful_translations)} individual mimic code files...")
+    print(f"\nSaving {len(successful_translations)} plan-to-code files in original log folders...")
     
     for i, result in enumerate(successful_translations):
         episode_id = result.get('episode_id', f'task_{i}')
         scene_id = result.get('scene_id', 'unknown')
         function_name = result.get('function_name', f'task_{i}')
-        mimic_code = result.get('mimic_format_code', '')
+        plan_to_code = result.get('mimic_format_code', '')
         task_description = result.get('task_description', '')
+        log_folder = result.get('log_folder', '')
+        validation_passed = result.get('validation_passed', False)
+        validation_message = result.get('validation_message', '')
         
-        # Create filename
-        filename = f"mimic_{episode_id}_{scene_id}_{function_name}.py"
-        filepath = mimic_dir / filename
+        print(f"  📁 Processing: {episode_id}")
+        print(f"  📝 Code length: {len(plan_to_code) if plan_to_code else 0}")
+        print(f"  📂 Log folder: {log_folder}")
+        print(f"  ✅ Validation passed: {validation_passed}")
+        if not validation_passed:
+            print(f"  ⚠ Validation issues: {validation_message[:100]}...")
         
-        # Create complete Python file content
-        file_content = f"""#!/usr/bin/env python3
+        if log_folder and Path(log_folder).exists():
+            original_log_path = Path(log_folder)
+            
+            # Check if we have valid code to save
+            if not plan_to_code or len(plan_to_code.strip()) == 0:
+                print(f"  ⚠ No valid code to save for {episode_id}")
+                continue
+            
+            # Create plan_to_code subdirectory in the original log folder
+            plan_to_code_dir = original_log_path / "plan_to_code"
+            plan_to_code_dir.mkdir(exist_ok=True)
+            
+            # Save the plan-to-code file in the log folder
+            filename = f"plan_to_code_{function_name}.py"
+            filepath = plan_to_code_dir / filename
+            
+            # Create complete Python file content
+            file_content = f"""#!/usr/bin/env python3
 \"\"\"
-Mimic Format Code for AI2-THOR Controller
-Generated from PDDL Action Sequence Translation
+Plan-to-Code Format for AI2-THOR Controller
+Generated from Complete PDDL Plan Translation
 
 Episode ID: {episode_id}
 Scene ID: {scene_id}
 Task: {task_description}
+Validation Passed: {validation_passed}
+Validation Message: {validation_message}
 \"\"\"
 
 import time
@@ -478,25 +814,41 @@ import threading
 # Import AI2-THOR controller functions
 # from ai2thor_controller import GoToObject, PickupObject, PutObject, SwitchOn, SwitchOff
 
-{mimic_code}
+{plan_to_code}
 
 # Example usage:
 # robot = get_robot_instance()
 # execute_task(robot)
 """
-        
-        # Save file
-        with open(filepath, 'w', encoding='utf-8') as f:
-            f.write(file_content)
-        
-        print(f"  ✓ Saved: {filename}")
+            
+            # Save file in the log folder
+            with open(filepath, 'w', encoding='utf-8') as f:
+                f.write(file_content)
+            
+            print(f"  ✓ Saved: {filename} in {log_folder}")
+            
+            # Also save as code_plan.py in the main log folder for execute_plan.py compatibility
+            code_plan_path = original_log_path / "code_plan.py"
+            with open(code_plan_path, 'w', encoding='utf-8') as f:
+                f.write(plan_to_code)
+            
+            print(f"  ✓ Saved code_plan.py in: {log_folder}")
+            
+        else:
+            print(f"  ⚠ Could not save files - log folder not found: {log_folder}")
     
-    print(f"All mimic code files saved to: {mimic_dir}")
+    print(f"All plan-to-code files saved in their respective log folders")
 
 def generate_summary(processed_results: List[Dict[str, Any]], output_dir: str):
     """Generate summary statistics and reports."""
     total_results = len(processed_results)
     successful_translations = sum(1 for r in processed_results if r.get('success', False))
+    
+    # Validation statistics
+    validation_results = [r.get('validation_message', '') for r in processed_results]
+    validation_passed = sum(1 for msg in validation_results if '✓' in msg or 'passed' in msg.lower())
+    validation_failed = sum(1 for msg in validation_results if '✗' in msg or 'failed' in msg.lower())
+    validation_skipped = sum(1 for msg in validation_results if 'skipped' in msg.lower())
     
     # Time statistics
     translation_times = [r.get('translation_time', 0) for r in processed_results if r.get('translation_time')]
@@ -507,33 +859,39 @@ def generate_summary(processed_results: List[Dict[str, Any]], output_dir: str):
         'total_results': total_results,
         'successful_translations': successful_translations,
         'success_rate': successful_translations / total_results * 100 if total_results > 0 else 0,
+        'validation_passed': validation_passed,
+        'validation_failed': validation_failed,
+        'validation_skipped': validation_skipped,
+        'validation_success_rate': validation_passed / (validation_passed + validation_failed) * 100 if (validation_passed + validation_failed) > 0 else 0,
         'average_translation_time': avg_translation_time,
         'total_translation_time': sum(translation_times)
     }
     
-    # Save summary
-    summary_file = Path(output_dir) / "mimic_translation_summary.json"
+    # Save summary in output directory
+    summary_file = Path(output_dir) / "plan_to_code_summary.json"
     with open(summary_file, 'w', encoding='utf-8') as f:
         json.dump(summary, f, indent=2, ensure_ascii=False)
     
-    # Save detailed results
-    results_file = Path(output_dir) / "mimic_translation_results.json"
+    # Save detailed results in output directory
+    results_file = Path(output_dir) / "plan_to_code_results.json"
     with open(results_file, 'w', encoding='utf-8') as f:
         json.dump(processed_results, f, indent=2, ensure_ascii=False)
     
     # Print summary
-    print(f"\n=== MIMIC TRANSLATION SUMMARY ===")
+    print(f"\n=== PLAN-TO-CODE TRANSLATION SUMMARY ===")
     print(f"Total results processed: {total_results}")
     print(f"Successful translations: {successful_translations} ({summary['success_rate']:.1f}%)")
+    # Remove validation statistics printing but keep validation functionality
     print(f"Average translation time: {summary['average_translation_time']:.2f}s")
     print(f"Total translation time: {summary['total_translation_time']:.2f}s")
     
-    print(f"\nResults saved to: {output_dir}")
+    print(f"\nSummary files saved to: {output_dir}")
     print(f"Summary: {summary_file}")
     print(f"Detailed results: {results_file}")
+    print(f"Individual plan-to-code files saved in their respective log folders")
 
 def parse_arguments() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description='Translate PDDL action sequences to mimic format using OpenAI API. Can load from JSON files or PDDL log directories created by pddlrun_llmseparate.py')
+    parser = argparse.ArgumentParser(description='Translate complete PDDL plans to AI2-THOR executable code using OpenAI API. Can load from JSON files or PDDL log directories created by pddlrun_llmseparate.py')
     parser.add_argument('--openai-api-key-file', type=str, default="api_key",
                        help='Path to OpenAI API key file')
     parser.add_argument('--gpt-version', type=str, default="gpt-4o",
@@ -548,16 +906,20 @@ def parse_arguments() -> argparse.Namespace:
                        default='./logs',
                        help='Path to logs directory from pddlrun_llmseparate.py (for pddl_logs input source)')
     parser.add_argument('--output-dir', type=str, 
-                       default='./mimic_translation_results',
-                       help='Directory to save mimic translation results')
+                       default='./plan_to_code_results',
+                       help='Directory to save plan-to-code translation results')
     parser.add_argument('--batch-size', type=int, default=3,
                        help='Number of tasks to process in each batch (default: 3)')
-    parser.add_argument('--max-tokens', type=int, default=1024,
+    parser.add_argument('--max-tokens', type=int, default=2048,  # Increased default
                        help='Maximum number of tokens to generate')
     parser.add_argument('--temperature', type=float, default=0.1,
                        help='Sampling temperature')
     parser.add_argument('--frequency-penalty', type=float, default=0.0,
                        help='Frequency penalty for token generation')
+    parser.add_argument('--validate-code', action='store_true', default=True,
+                       help='Validate generated code for execute_plan.py compatibility (default: True)')
+    parser.add_argument('--no-validate-code', dest='validate_code', action='store_false',
+                       help='Skip code validation')
     
     args = parser.parse_args()
     
@@ -598,15 +960,16 @@ def main():
         )
         
         # Process results for mimic translation
-        processed_results = process_results_for_mimic(
+        processed_results = process_results_for_plan_to_code(
             results=results,
             translator=translator,
             output_dir=args.output_dir,
-            batch_size=args.batch_size
+            batch_size=args.batch_size,
+            validate_code=args.validate_code
         )
         
         # Save individual mimic files
-        save_individual_mimic_files(processed_results, args.output_dir)
+        save_individual_plan_to_code_files(processed_results, args.output_dir)
         
         # Generate summary
         generate_summary(processed_results, args.output_dir)

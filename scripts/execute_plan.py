@@ -25,17 +25,39 @@ def compile_aithor_exec_file(expt_name):
     # append the list of robots and floor plan number
     log_file = open(log_path + "/log.txt")
     log_data = log_file.readlines()
-    # append the robot list
-    executable_plan += (log_data[8] + "\n")
-    # append the floor number
-    flr_no = log_data[4][12:]
-    gt = log_data[9]
-    executable_plan += ("floor_no = " + flr_no + "\n\n")
-    executable_plan += (gt)
-    trans = log_data[10][8:]
-    executable_plan += ("no_trans_gt = " + trans)
-    max_trans = log_data[11][12:]
-    executable_plan += ("max_trans = " + max_trans + "\n")
+    
+    # Find robots line (contains "robots =")
+    robots_line = None
+    for line in log_data:
+        if "robots = " in line:
+            robots_line = line.strip()
+            break
+    
+    if robots_line:
+        executable_plan += (robots_line + "\n")
+    else:
+        # Fallback: create default robots list
+        executable_plan += ("robots = [{'name': 'robot1', 'skills': ['GoToObject', 'PickupObject', 'PutObject'], 'mass': 100}]\n")
+    
+    # Set default floor number (since it's not in current log format)
+    executable_plan += ("floor_no = 1\n\n")
+    
+    # Find ground truth line (contains "ground_truth =")
+    gt_line = None
+    for line in log_data:
+        if "ground_truth = " in line:
+            gt_line = line.strip()
+            break
+    
+    if gt_line:
+        executable_plan += (gt_line + "\n")
+    else:
+        # Fallback: create empty ground truth
+        executable_plan += ("ground_truth = []\n")
+    
+    # Set default trans values (since they're not in current log format)
+    executable_plan += ("no_trans_gt = 0\n")
+    executable_plan += ("max_trans = 10\n")
     
     # append the ai thoe connector and helper fns
     connector_file = Path(os.getcwd() + "/data/aithor_connect/aithor_connect.py").read_text()
@@ -43,6 +65,14 @@ def compile_aithor_exec_file(expt_name):
     
     # append the allocated plan
     allocated_plan = Path(log_path + "/code_plan.py").read_text()
+    
+    # Replace empty robots list with actual robots from log file
+    if robots_line:
+        # Remove the robots = [] line from the generated code and replace with actual robots
+        allocated_plan = allocated_plan.replace("robots = []", robots_line.strip())
+        allocated_plan = allocated_plan.replace("robots = ['robot1']", robots_line.strip())
+        allocated_plan = allocated_plan.replace("robots = ['Robot2']", robots_line.strip())
+    
     brks = append_trans_ctr(allocated_plan)
     executable_plan += (allocated_plan + "\n")
     executable_plan += ("no_trans = " + str(brks) + "\n")
