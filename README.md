@@ -88,13 +88,13 @@ Output files are stored in the `logs` directory, organized by timestamp and task
 To execute the generated plans in the AI2Thor environment:
 Convert the target plan into code
 ```bash
-python scripts/plantocode.py --logs-dir ./logs --validate-code
+python plantocode.py --logs-dir ./logs --validate-code
+
 ```
 then, 
 ```bash
 python scripts/execute_plan.py --command <log_folder_name>
 ```
-
 Replace `<log_folder_name>` with the specific folder name in the `logs` directory containing your generated plan.
 
 ## Citation
@@ -103,7 +103,7 @@ If you find this work useful for your research, please consider citing:
 @inproceedings{zhang2025lamma,
   title={LaMMA-P: Generalizable Multi-Agent Long-Horizon Task Allocation and Planning with LM-Driven PDDL Planner},
   author={Zhang, Xiaopan and Qin, Hao and Wang, Fuquan and Dong, Yue and Li, Jiachen},
-  journal={2025 IEEE International Conference on Robotics and Automation (ICRA)},
+  booktitle={2025 IEEE International Conference on Robotics and Automation (ICRA)},
   year={2025},
   organization={IEEE}
 }
